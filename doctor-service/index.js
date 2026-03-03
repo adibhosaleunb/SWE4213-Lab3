@@ -35,6 +35,15 @@ app.get('/doctors/:id', async (req, res) => {
 app.post('/doctors/:id/reserve', async (req, res) => {
   const client = await pool.connect();
   try {
+  
+    const slotsToReserve = req.body?.slots;
+    if (typeof slotsToReserve !== 'number' || slotsToReserve <= 0 || !Number.isInteger(slotsToReserve)) {
+      return res.status(400).json({ 
+        success: false, 
+        reason: 'slots must be a positive integer' 
+      });
+    }
+
     await client.query('BEGIN');
     const doc = await client.query('SELECT * FROM doctors WHERE id = $1 FOR UPDATE', [req.params.id]);
     
@@ -42,14 +51,15 @@ app.post('/doctors/:id/reserve', async (req, res) => {
       return res.status(404).json({ success: false, reason: 'Doctor not found' });
     }
     
-    if (doc.rows[0].slots <= 0) {
+    const doctor = doc.rows[0];
+    if (doctor.slots < slotsToReserve) {
       return res.status(409).json({ 
         success: false, 
-        reason: `${doc.rows[0].name} has no available slots.` 
+        reason: `${doctor.name} has only ${doctor.slots} available slots, requested ${slotsToReserve}` 
       });
     }
     
-    await client.query('UPDATE doctors SET slots = slots - 1 WHERE id = $1', [req.params.id]);
+    await client.query('UPDATE doctors SET slots = slots - $1 WHERE id = $2', [slotsToReserve, req.params.id]);
     await client.query('COMMIT');
     
     const updated = await client.query('SELECT * FROM doctors WHERE id = $1', [req.params.id]);
@@ -57,7 +67,8 @@ app.post('/doctors/:id/reserve', async (req, res) => {
       success: true,
       doctor_id: req.params.id,
       doctor_name: updated.rows[0].name,
-      slots_remaining: updated.rows[0].slots
+      slots_remaining: updated.rows[0].slots,
+      slots_reserved: slotsToReserve
     });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -66,6 +77,7 @@ app.post('/doctors/:id/reserve', async (req, res) => {
     client.release();
   }
 });
+
 
 app.get('/health', (req, res) => {
   res.status(200).json({ 

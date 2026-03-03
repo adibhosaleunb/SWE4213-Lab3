@@ -18,14 +18,24 @@ async function publishEvent(event) {
 }
 
 app.post('/create', async (req, res) => {
-  const { patient_name, patient_email, doctor_id, reason } = req.body;
+  const { patient_name, patient_email, doctor_id, reason, slots = 1 } = req.body;
   
-  if (!patient_name || !patient_email || !doctor_id || !reason) {
-    return res.status(400).json({ status: 'error', reason: 'Missing fields' });
+  if (!patient_name || !patient_email || !doctor_id || !reason || slots <= 0 || !Number.isInteger(slots)) {
+    return res.status(400).json({ 
+      status: 'error', 
+      reason: 'Missing fields or invalid slots (must be positive integer)' 
+    });
   }
   
   try {
-    const resp = await axios.post(`${DOCTOR_URL}/doctors/${doctor_id}/reserve`);
+    const resp = await axios.post(
+      `${DOCTOR_URL}/doctors/${doctor_id}/reserve`,
+      { slots }, 
+      { 
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 5000 
+      }
+    );
     
     if (!resp.data.success) {
       return res.status(409).json(resp.data);
@@ -33,25 +43,31 @@ app.post('/create', async (req, res) => {
 
     const event = {
       appointment_id: uuidv4(),
-      patient_name, patient_email, doctor_id,
+      patient_name, 
+      patient_email, 
+      doctor_id,
       doctor_name: resp.data.doctor_name,
-      reason, timestamp: new Date().toISOString()
+      slots_reserved: resp.data.slots_reserved,
+      reason, 
+      timestamp: new Date().toISOString()
     };
 
     await publishEvent(event);  
     res.status(201).json({
       appointment_id: event.appointment_id,
       status: 'confirmed',
-      message: `Appointment with ${event.doctor_name} booked!`
+      message: `Appointment with ${event.doctor_name} booked! ${event.slots_reserved} slots reserved.`,
+      slots_remaining: resp.data.slots_remaining
     });
   } catch (err) {
-    console.log(err);
+    console.error('Appointment creation failed:', err.response?.data || err.message);
     res.status(409).json({ 
       status: 'rejected', 
       reason: err.response?.data?.reason || 'Reservation failed' 
     });
   }
 });
+
 
 app.get('/health', (req, res) => {
   res.status(200).json({ 
